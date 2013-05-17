@@ -99,6 +99,11 @@ serviceSet.each { name, service ->
         if(first)
             return
 
+        if(stuff[0].contains("void") && stuff[0].contains("()")) {
+            println "Matches!" + stuff[0]
+            return
+        }
+
         first = true
         service.returnType = stuff[1]
         def arguments =  stuff[2].replace('\n', ' ').replace('\t', ' ').replace("final", "")
@@ -111,6 +116,10 @@ serviceSet.each { name, service ->
         }
     })
 
+    migrateService(service, text, file, fileName)
+}
+
+def migrateService(service, text, file, fileName) {
 
     text = text.replaceAll("public[ \t\n]*([A-Za-z]*)[ \t\n]*run", { stuff ->
         "protected " + stuff[1] + " run"
@@ -118,7 +127,9 @@ serviceSet.each { name, service ->
 
     text = text.substring(0, text.lastIndexOf('}'))
 
-    text = text + generateRunWithACL(service, fileName) + "\n}"
+    def generateInstance = !(text.contains("private static final ") && text.contains(" instance = new "));
+
+    text = text + generateRunWithACL(service, fileName, generateInstance) + "\n}"
 
     def splitPoint = text.indexOf("import")
 
@@ -127,14 +138,17 @@ serviceSet.each { name, service ->
     file.text = text
 }
 
-def generateRunWithACL(service, fileName) {
+def generateRunWithACL(service, fileName, generateInstance) {
 
     def nameSplit = service.name.split("\\.")
 
     def method = ""
 
+    if(generateInstance)
+        method <<= "    private static final " + fileName + " instance = new " + fileName + "();\n\n"
+
     method <<= "    @Service\n"
-    method <<= "    public static " + service.returnType + " run" + nameSplit[nameSplit.length - 1]+ "WithAccessControl(" + service.argumentsList() + ") "
+    method <<= "    public static " + service.returnType + " run" + nameSplit[nameSplit.length - 1]+ "(" + service.argumentsList() + ") "
     if(service.exceptions != null && !service.exceptions.trim().isEmpty()) {
         method <<= "throws " + service.exceptions + " "
     }
@@ -142,6 +156,6 @@ def generateRunWithACL(service, fileName) {
     if(!"void".equals(service.returnType)) {
         method <<= "return ";
     }
-    method <<= "new " + fileName + "().run(" + service.argumentNames() + ");\n"
+    method <<= "instance.run(" + service.argumentNames() + ");\n"
     method <<= "    }\n"
 }
