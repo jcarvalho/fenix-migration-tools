@@ -14,7 +14,7 @@ readers.each { reader, clazz ->
     def method = ''
     method <<= "    @Deprecated\n"
     method <<= "    public static " + clazz + " " + reader + "(String externalId) {\n"
-    method <<= "        " + clazz + " domainObject = AbstractDomainObject.fromExternalId(externalId);\n"
+    method <<= "        " + clazz + " domainObject = FenixFramework.getDomainObject(externalId);\n"
     method <<= "        return (domainObject == null || domainObject.getRootDomainObject() == null) ? null : domainObject;\n"
     method <<= "    }\n\n"
     text = text.concat(method.toString())

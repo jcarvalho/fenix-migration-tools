@@ -100,10 +100,6 @@ Globals.serviceSet.each { name, service ->
         if(first)
             return
 
-        if(stuff[0].contains("void") && stuff[0].contains("()")) {
-            println "Matches!" + stuff[0]
-            return
-        }
 
         first = true
         service.returnType = stuff[1]
@@ -117,11 +113,29 @@ Globals.serviceSet.each { name, service ->
         }
     })
 
-    migrateFilters(service)
+    // migrateFilters(service)
 
     migrateService(service, text, file, fileName)
 }
-
+/*
+ Globals.filterMap.each { name, impl ->
+ def file = new File("src/main/java/" + impl.replace('.', '/') + ".java")
+ def fileParts = impl.split("\\.")
+ def fileName = fileParts[fileParts.length - 1]
+ def text = file.text
+ if(text.contains(fileName + " instance"))
+ return;
+ def splitIndex = text.indexOf('{');
+ def contents = text[0..splitIndex]
+ contents <<= "\n\n    public static final "
+ contents <<= fileName
+ contents <<= " instance = new "
+ contents <<= fileName
+ contents <<= "();"
+ contents <<= text[splitIndex+1..-1]
+ file.text = contents.toString()
+ }
+ */
 def migrateFilters(service) {
 
     runForFilters(service, {
@@ -151,8 +165,6 @@ def migrateFilters(service) {
             }
         })
 
-        text = text.replace("@Override", "")
-
         file.text = text
     })
 }
@@ -172,15 +184,36 @@ def migrateService(service, text, file, fileName) {
 
     text = text.substring(0, text.lastIndexOf('}'))
 
-    def generateInstance = !(text.contains("private static final ") && text.contains(" instance = new "));
+    def generateInstance = !(text.contains("private static final ") && text.contains(" serviceInstance = new "));
 
-    text = text + generateRunWithACL(service, fileName, generateInstance) + "\n}"
+    text = text + "    // Service Invokers migrated from Berserk\n\n"
+
+    text = text + generateRunWithACL(service, fileName, generateInstance)
+
+
+    text = text + "\n}"
+
 
     def splitPoint = text.indexOf("import")
 
-    text = text.substring(0, splitPoint) + "import pt.ist.fenixWebFramework.services.Service;\n" + text.substring(splitPoint)
+    text = text.substring(0, splitPoint) +
+            "import pt.ist.fenixframework.Atomic;\nimport net.sourceforge.fenixedu.applicationTier.Servico.exceptions.NotAuthorizedException;\n"   +
+            text.substring(splitPoint)
+
+    // text = text.replace(" extends FenixService", "")
 
     file.text = text
+}
+
+def simplify(className) {
+    def nameSplit = className.split("\\.")
+    nameSplit[nameSplit.length - 1]
+}
+
+def countFilters(service) {
+    def counter = 0
+    runForFilters(service, { counter++ })
+    counter
 }
 
 def generateRunWithACL(service, fileName, generateInstance) {
@@ -189,44 +222,61 @@ def generateRunWithACL(service, fileName, generateInstance) {
 
     def method = ""
 
+    def filterCount = countFilters(service)
+
     if(generateInstance) {
-        method <<= "    private static final " + fileName + " instance = new " + fileName + "();\n\n"
-        runForFilters(service, {
-
-            def impl = Globals.filterMap.get(it)
-            if(impl == null) {
-                println "Impl is null!"
-                return
-            }
-
-            def filter = impl.split("\\.")
-            if(filter.length > 0) {
-                method <<= "    private static final " + filter[filter.length - 1] + " " + it[0].toLowerCase() + it[1..-1] + " = new " + filter[filter.length - 1] + "();\n"
-            } else {
-                println "Len is " + filter.length + " " + impl
-            }
-        })
-
-        method <<= "\n"
+        method <<= "    private static final " + fileName + " serviceInstance = new " + fileName + "();\n\n"
     }
 
-    method <<= "    @Service\n"
+    method <<= "    @Atomic\n"
     method <<= "    public static " + service.returnType + " run" + nameSplit[nameSplit.length - 1]+ "(" + service.argumentsList() + ") "
     if(service.exceptions != null && !service.exceptions.trim().isEmpty()) {
         method <<= "throws " + service.exceptions + " "
+        if(filterCount > 0) {
+            method <<= ", NotAuthorizedException "
+        }
+    } else if(filterCount > 0 ) {
+        method <<= "throws NotAuthorizedException "
     }
     method <<= "{\n"
 
+    def count = 1
+
     runForFilters(service, {
-        method <<= "        " + it[0].toLowerCase() + it[1..-1] + ".execute(" + service.argumentNames() + ");\n"
+        def impl = Globals.filterMap.get(it)
+        if(impl == null) {
+            println "Null impl for " + it + " on service " + service.name
+        } else {
+            if(filterCount > 1) {
+                method <<= "        try {\n"
+                method <<= "            " + simplify(Globals.filterMap.get(it)) + ".instance.execute(" + service.argumentNames() + ");\n"
+                method <<= "            " + invocation(service)
+                method <<= "        } catch (NotAuthorizedException ex" + count++ + ") {\n"
+            } else {
+                method <<= "        " + simplify(Globals.filterMap.get(it)) + ".instance.execute(" + service.argumentNames() + ");\n"
+            }
+        }
     })
 
-    method <<= "        "
-
-
-    if(!"void".equals(service.returnType)) {
-        method <<= "return ";
+    if(filterCount <= 1) {
+        method <<= "        "
+        method <<= invocation(service)
+    } else {
+        method <<= "        throw ex" + (count - 1) + ";\n"
+        method <<= "        "
+        while(count > 1) {
+            method <<= "        }\n"
+            count--
+        }
     }
-    method <<= "instance.run(" + service.argumentNames() + ");\n"
     method <<= "    }\n"
+}
+
+def invocation(service) {
+    def invoc = "";
+    if(!"void".equals(service.returnType)) {
+        invoc <<= "return ";
+    }
+    invoc <<= "serviceInstance.run(" + service.argumentNames() + ");\n"
+    invoc
 }
